@@ -23,9 +23,14 @@ import org.jivesoftware.smackx.omemo.elements.OmemoBundleElement;
 import org.jivesoftware.smackx.omemo.elements.OmemoDeviceListElement;
 import org.jivesoftware.smackx.omemo.internal.OmemoDevice;
 import org.jivesoftware.smackx.pubsub.LeafNode;
-import org.jivesoftware.smackx.pubsub.PayloadItem;
 import org.jivesoftware.smackx.pubsub.PubSubManager;
+import org.jivesoftware.smackx.pubsub.PayloadItem;
 import org.jxmpp.jid.BareJid;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import static org.jivesoftware.smackx.omemo.util.OmemoConstants.PEP_NODE_BUNDLE_FROM_DEVICE_ID;
 import static org.jivesoftware.smackx.omemo.util.OmemoConstants.PEP_NODE_DEVICE_LIST;
@@ -37,10 +42,75 @@ import static org.jivesoftware.smackx.omemo.util.OmemoConstants.PEP_NODE_DEVICE_
  */
 public class PubSubHelper {
 
+    private static final Logger LOGGER = Logger.getLogger(PubSubHelper.class.getName());
+
     private final OmemoManager manager;
 
     public PubSubHelper(OmemoManager manager) {
         this.manager = manager;
+    }
+
+    /**
+     * Try to get a LeafNode via PubSub.
+     *
+     * @param contact  bareJid of the user that owns the node we want to get
+     * @param nodeName the name of the node
+     * @return the LeafNode
+     * @throws SmackException.NotConnectedException when
+     * @throws InterruptedException                 something
+     * @throws SmackException.NoResponseException   fails
+     */
+    public LeafNode getNode(BareJid contact, String nodeName) throws SmackException.NotConnectedException, InterruptedException, SmackException.NoResponseException {
+        BareJid owner = (contact == null ? manager.getConnection().getUser().asBareJid() : contact);
+        PubSubManager pm = PubSubManager.getInstance(manager.getConnection(), owner);
+        try { //The classic way
+            return pm.getNode(nodeName);
+        }
+        //Node does not exist:
+        catch (AssertionError e) {
+            if (manager.getConnection().getUser().asBareJid().equals(contact)) {
+                LOGGER.log(Level.INFO, "It looks like the node does not exist. Create it.");
+                try {
+                    return pm.createNode(nodeName);
+                } catch (XMPPException.XMPPErrorException e1) {
+                    LOGGER.log(Level.INFO, "Could not create node the classic way.\n"+e.getMessage());
+                    return null;
+                }
+            } else {
+                LOGGER.log(Level.INFO, "It looks like the node does not exist.");
+                return null;
+            }
+        }
+        //Prosody workaround
+        catch (XMPPException.XMPPErrorException e) {
+            LOGGER.log(Level.INFO, "Server " + owner.getDomain() + " does not support some PubSub features needed by Smack. Probably a Prosody Server. Try workaround.");
+            try {
+                return getNodeWorkaround(pm, nodeName);
+            } catch (IllegalAccessException | InvocationTargetException | InstantiationException reflectionError) {
+                LOGGER.log(Level.INFO, "Could not create a node via reflections: " + reflectionError.getMessage());
+                return null;
+            }
+            //TODO: What if Node does not exist?
+        }
+    }
+
+    /**
+     * This is black magic!
+     * Get a {@link LeafNode} from a prosody server.
+     * Using conventional methods fails on prosody.
+     * See <href>https://prosody.im/issues/issue/805</href> for more information.
+     *
+     * @param pm       PubSubManager
+     * @param nodeName name of the node
+     * @return the LeafNode
+     * @throws IllegalAccessException    When Access is denied
+     * @throws InvocationTargetException and
+     * @throws InstantiationException    when instantiating the node via reflections fails.
+     */
+    public LeafNode getNodeWorkaround(PubSubManager pm, String nodeName) throws IllegalAccessException, InvocationTargetException, InstantiationException {
+        Constructor<?> constructor = LeafNode.class.getDeclaredConstructors()[0];
+        constructor.setAccessible(true);
+        return (LeafNode) constructor.newInstance(pm, nodeName);
     }
 
     /**
@@ -54,7 +124,7 @@ public class PubSubHelper {
      * @throws SmackException.NoResponseException   wrong
      */
     public OmemoDeviceListElement fetchDeviceList(BareJid contact) throws XMPPException.XMPPErrorException, SmackException.NotConnectedException, InterruptedException, SmackException.NoResponseException {
-        LeafNode node = PubSubManager.getInstance(manager.getConnection(), contact).getNode(PEP_NODE_DEVICE_LIST);
+        LeafNode node = getNode(contact, PEP_NODE_DEVICE_LIST);
         return extractDeviceListFrom(node);
     }
 
@@ -69,7 +139,7 @@ public class PubSubHelper {
      * @throws SmackException.NoResponseException   wrong
      */
     public OmemoBundleElement fetchBundle(OmemoDevice contact) throws XMPPException.XMPPErrorException, SmackException.NotConnectedException, InterruptedException, SmackException.NoResponseException {
-        LeafNode node = PubSubManager.getInstance(manager.getConnection(), contact.getJid()).getNode(PEP_NODE_BUNDLE_FROM_DEVICE_ID(contact.getDeviceId()));
+        LeafNode node = getNode(contact.getJid(), PEP_NODE_BUNDLE_FROM_DEVICE_ID(contact.getDeviceId()));
         if (node != null) {
             return extractBundleFrom(node);
         } else {
@@ -112,14 +182,10 @@ public class PubSubHelper {
         if (node == null) {
             return null;
         }
-        if(node.getItems().size() > 0) {
-            OmemoDeviceListElement listElement = (OmemoDeviceListElement) ((PayloadItem<?>) node.getItems().get(node.getItems().size() - 1)).getPayload();
-            if(node.getItems().size() > 1) {
-                node.deleteAllItems();
-                node.send(new PayloadItem<>(listElement));
-            }
-            return listElement;
+        if (node.getItems().size() != 0) {
+            return (OmemoDeviceListElement) ((PayloadItem<?>) node.getItems().get(0)).getPayload();
+        } else {
+            return new OmemoDeviceListElement();
         }
-        return new OmemoDeviceListElement();
     }
 }

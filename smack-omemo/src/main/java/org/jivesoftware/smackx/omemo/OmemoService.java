@@ -183,7 +183,8 @@ public abstract class OmemoService<T_IdKeyPair, T_IdKey, T_PreKey, T_SigPreKey, 
      */
     private LeafNode fetchDeviceListNode() throws SmackException.NotConnectedException, InterruptedException,
             SmackException.NoResponseException, XMPPException.XMPPErrorException {
-        return PubSubManager.getInstance(omemoManager.getConnection(), ownJid).getOrCreateLeafNode(PEP_NODE_DEVICE_LIST);
+       return getPubSubHelper().getNode(null, PEP_NODE_DEVICE_LIST);
+      //  return PubSubManager.getInstance(omemoManager.getConnection(), ownJid).getOrCreateLeafNode(PEP_NODE_DEVICE_LIST);
     }
 
     /**
@@ -237,8 +238,10 @@ public abstract class OmemoService<T_IdKeyPair, T_IdKey, T_PreKey, T_SigPreKey, 
             omemoStore.setDateOfLastSignedPreKeyRenewal(new Date());
         }
 
-        LeafNode bundleNode = PubSubManager.getInstance(omemoManager.getConnection(), ownJid)
-                .getOrCreateLeafNode(PEP_NODE_BUNDLE_FROM_DEVICE_ID(omemoStore.loadOmemoDeviceId()));
+       LeafNode bundleNode = getPubSubHelper()
+                 .getNode(ownJid, PEP_NODE_BUNDLE_FROM_DEVICE_ID(omemoStore.loadOmemoDeviceId()));
+//        LeafNode bundleNode = PubSubManager.getInstance(omemoManager.getConnection(), ownJid)
+ //               .getOrCreateLeafNode(PEP_NODE_BUNDLE_FROM_DEVICE_ID(omemoStore.loadOmemoDeviceId()));
         bundleNode.send(new PayloadItem<>(omemoStore.packOmemoBundle()));
     }
 
@@ -253,8 +256,17 @@ public abstract class OmemoService<T_IdKeyPair, T_IdKey, T_PreKey, T_SigPreKey, 
             throws SmackException.NotConnectedException, InterruptedException, SmackException.NoResponseException,
             XMPPException.XMPPErrorException {
         boolean publish = false;
-        this.ownDeviceListNode = fetchDeviceListNode();
-        OmemoDeviceListElement deviceList = getPubSubHelper().extractDeviceListFrom(ownDeviceListNode);
+        OmemoDeviceListElement deviceList = null;
+
+	try
+        {	
+        	this.ownDeviceListNode = fetchDeviceListNode();
+        	deviceList = getPubSubHelper().extractDeviceListFrom(ownDeviceListNode);
+	}
+	catch (Exception e)
+	{
+	     LOGGER.log(Level.WARNING,e.getMessage());
+	}
 
         if (deviceList == null) {
             deviceList = new OmemoDeviceListElement();
@@ -309,8 +321,9 @@ public abstract class OmemoService<T_IdKeyPair, T_IdKey, T_PreKey, T_SigPreKey, 
     protected void publishDeviceIds(OmemoDeviceListElement deviceList)
             throws InterruptedException, XMPPException.XMPPErrorException,
             SmackException.NotConnectedException, SmackException.NoResponseException {
-        PubSubManager.getInstance(omemoManager.getConnection(),ownJid).getOrCreateLeafNode(OmemoConstants.PEP_NODE_DEVICE_LIST)
-                .send(new PayloadItem<>(deviceList));
+       LeafNode bundleNode = getPubSubHelper()
+                 .getNode(ownJid, PEP_NODE_DEVICE_LIST);
+        bundleNode.send(new PayloadItem<>(deviceList));
     }
 
     /**
